@@ -1,0 +1,204 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>QR</title>
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/css/bootstrap.min.css" rel="stylesheet">
+  <style>
+    body {
+      background-color: #f8f9fa;
+    }
+    #video-container {
+      position: relative;
+      width: 100%;
+      max-width: 500px;
+      margin: 0 auto;
+      border-radius: 15px;
+      overflow: hidden;
+      box-shadow: 0 4px 8px rgba(0, 0, 0, 0.1);
+    }
+    #video {
+      width: 100%;
+      display: block;
+    }
+    #canvas {
+      display: none;
+    }
+    .btn-custom {
+      margin: 5px;
+      padding: 10px 20px;
+      font-size: 16px;
+      border-radius: 25px;
+    }
+    .btn-success {
+      background-color: #28a745;
+      border-color: #28a745;
+    }
+    .btn-danger {
+      background-color: #dc3545;
+      border-color: #dc3545;
+    }
+    .btn-success:hover, .btn-danger:hover {
+      opacity: 0.9;
+    }
+  </style>
+</head>
+<body>
+  <div class="container mt-5">
+    <div class="row justify-content-center">
+      <div class="col-md-8 text-center">
+        <h1 class="mb-4">Escanear Credencial</h1>
+        <div id="video-container">
+          <video id="video" autoplay playsinline></video>
+          <canvas id="canvas"></canvas>
+        </div>
+        <div class="mt-4">
+          <button id="btn-scan" class="btn btn-success btn-custom">Iniciar</button>
+          <button id="btn-stop" class="btn btn-danger btn-custom">Detener</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Modal para mostrar la información -->
+  <div class="modal fade" id="infoModal" tabindex="-1" aria-labelledby="infoModalLabel" aria-hidden="true">
+    <div class="modal-dialog">
+      <div class="modal-content">
+        <div class="modal-header">
+          <h5 class="modal-title" id="infoModalLabel">Información del Estudiante</h5>
+          <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+        </div>
+        <div class="modal-body" id="modal-body">
+          <!-- Aquí se mostrará la información del estudiante -->
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cerrar</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/js/bootstrap.bundle.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.min.js"></script>
+  <script>
+    // Elementos del DOM
+    const video = document.getElementById('video');
+    const canvas = document.getElementById('canvas');
+    const btnScan = document.getElementById('btn-scan');
+    const btnStop = document.getElementById('btn-stop');
+    const modalBody = document.getElementById('modal-body');
+    const infoModal = new bootstrap.Modal(document.getElementById('infoModal'));
+
+    let stream = null;
+    let scanning = false;
+
+    // Función para iniciar la cámara
+    async function iniciarCamara() {
+      try {
+        // Solicitar acceso a la cámara
+        stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } });
+        video.srcObject = stream;
+
+        // Esperar a que el video esté listo
+        video.onloadedmetadata = () => {
+          video.play();
+          scanning = true;
+          escanearCodigoQR();
+        };
+      } catch (error) {
+        console.error('Error al acceder a la cámara:', error);
+        mostrarError('No se pudo acceder a la cámara.');
+      }
+    }
+
+    // Función para detener la cámara
+    function detenerCamara() {
+      if (stream) {
+        stream.getTracks().forEach(track => track.stop());
+        scanning = false;
+        video.srcObject = null;
+      }
+    }
+
+    // Función para escanear el código QR
+    function escanearCodigoQR() {
+      if (!scanning) return;
+
+      // Verificar si el video tiene dimensiones válidas
+      if (video.videoWidth === 0 || video.videoHeight === 0) {
+        console.warn('El video aún no tiene dimensiones válidas. Reintentando...');
+        requestAnimationFrame(escanearCodigoQR);
+        return;
+      }
+
+      const context = canvas.getContext('2d');
+      canvas.width = video.videoWidth;
+      canvas.height = video.videoHeight;
+
+      // Dibujar el video en el canvas
+      context.drawImage(video, 0, 0, canvas.width, canvas.height);
+
+      // Obtener la imagen del canvas
+      const imageData = context.getImageData(0, 0, canvas.width, canvas.height);
+
+      // Decodificar el código QR
+      const code = jsQR(imageData.data, imageData.width, imageData.height, {
+        inversionAttempts: 'dontInvert',
+      });
+
+      // Si se detecta un código QR
+      if (code) {
+        detenerCamara();
+        buscarEnBaseDeDatos(code.data);
+      } else {
+        // Continuar escaneando
+        requestAnimationFrame(escanearCodigoQR);
+      }
+    }
+
+    // Función para buscar en la base de datos
+    async function buscarEnBaseDeDatos(codigoQR) {
+      try {
+        const response = await fetch('busqueda.php', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/x-www-form-urlencoded',
+          },
+          body: `codigo_qr=${codigoQR}`,
+        });
+        const data = await response.json();
+
+        if (data.status === "success") {
+          mostrarInformacion(data.data);
+        } else {
+          mostrarError(data.message || 'No se encontró información para el código QR escaneado.');
+        }
+      } catch (error) {
+        console.error('Error en la solicitud:', error);
+        mostrarError('Error al buscar en la base de datos.');
+      }
+    }
+
+    // Función para mostrar la información en el modal
+    function mostrarInformacion(data) {
+      modalBody.innerHTML = `
+        <p><strong>Nombre:</strong> ${data.nombre}</p>
+        <p><strong>Matrícula:</strong> ${data.matricula}</p>
+        <p><strong>Carrera:</strong> ${data.carrera}</p>
+      `;
+      infoModal.show();
+    }
+
+    // Función para mostrar errores en el modal
+    function mostrarError(mensaje) {
+      modalBody.innerHTML = `<p class="text-danger">${mensaje}</p>`;
+      infoModal.show();
+    }
+
+    // Eventos de los botones
+    btnScan.addEventListener('click', iniciarCamara);
+    btnStop.addEventListener('click', detenerCamara);
+  </script>
+</body>
+</html>
